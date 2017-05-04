@@ -11,12 +11,12 @@ import glob
 import logging
 import os
 
-from .util import logger_for_class
+from .work import Task, Breakable
+from .util import log_for
 
 #--------------------------------------------------------------------
 class File:
     def __init__(self, filename):
-        self.log = logger_for_class(self)
         self.filename = str(filename)
     
     @staticmethod
@@ -46,19 +46,9 @@ class File:
     def abspath(self):
         return os.path.abspath(os.path.expanduser(self.filename))
     
-    def make(self):
-        pass
-
-    def build(self):
-        if not self.exists():
-            self.make()
-        if not self.exists():
-            raise BuildError('Required file does not exist or was not created: %s' % str(self))
-            
-
     def remove(self):
         if self.exists():
-            self.log.warning('Deleting file: %s' % self.abspath())
+            log_for(self).warning('Deleting file: %s' % self.abspath())
             os.remove(self.abspath())
 
     def exists(self):
@@ -71,4 +61,13 @@ class File:
 
     def __str__(self):
         return self.abspath()
+
+#--------------------------------------------------------------------
+class FileTask(Task, Breakable):
+    def __init__(self, file):
+        super().__init__(str(file))
+        self.file = file
+        
+    def breakdown(self):
+        return self.file
 

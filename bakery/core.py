@@ -9,11 +9,11 @@ import functools
 import logging
 import os
 import sys
-
-from xeno import Injector, provide
+import xeno
 
 from .util import *
 from .file import *
+from .work import *
 
 #--------------------------------------------------------------------
 def is_debug():
@@ -26,7 +26,6 @@ class BuildError(Exception):
 #--------------------------------------------------------------------
 class Build:
     def __init__(self):
-        self.log = logger_for_class(self)
         self.outputs = []
         self.targets = set()
         self.temp_outputs = []
@@ -34,15 +33,15 @@ class Build:
         self.default_target = None
         self.cleaning = False
 
-    @provide
+    @xeno.provide
     def build(self):
         return self
     
-    @provide
+    @xeno.provide
     def build_log_format(self):
         return '%(message)s'
 
-    @provide
+    @xeno.provide
     def _build_init(self, build_log_format):
         # Setup stdout logging
         root = logging.getLogger()
@@ -53,52 +52,60 @@ class Build:
         handler.setFormatter(formatter)
         root.addHandler(handler)
 
-    def provide(self, f):
-        return provide(f)
-    
-    def _generic_file_func_wrapper(self, f, err_msg_prefix,
-                                   callback = lambda x: None):
+    def _generic_task_func_wrapper(self, f, decorator_name,
+                                   task_callback = lambda x: None):
+        def dispatch_result(result):
+            if isinstance(result, Task):
+                task_callback(result)
+            return result
+        
         @functools.wraps(f)
         def generic_wrapper(mod_self, *args, **kwargs):
             obj = f(mod_self, *args, **kwargs)
-            obj_list = list(flat_map([obj]))
-            for item in obj_list:
-                if not isinstance(item, File):
-                    raise ValueError('%s decorated provider "%s" should provide a File object or list of File objects.' % (err_msg_prefix, f.__name__))
-            for file in obj_list:
-                callback(file)
+            return wide_map(obj, dispatch_result)
 
-            return obj
-
-        return provide(generic_wrapper)
+        return xeno.singleton(generic_wrapper)
 
     def input(self, f):
-        return self._generic_file_func_wrapper(f, '@input')
+        return self._generic_task_func_wrapper(f, '@input')
 
     def output(self, f):
-        def wrapper(file):
-            self.outputs.append(file)
+        def wrapper(obj):
+            if isinstance(obj, Cleanable):
+                self.outputs.append(obj)
 
-        return self._generic_file_func_wrapper(f, '@output', wrapper)
+        return self._generic_task_func_wrapper(f, '@output', wrapper)
 
     def temporary(self, f):
-        def wrapper(file):
-            self.temp_outputs.append(file)
-        
-        return self._generic_file_func_wrapper(f, '@temporary', wrapper)
+        def wrapper(obj):
+            if isinstance(obj, Cleanable):
+                self.temp_outputs.append(obj)
 
+        return self._generic_task_func_wrapper(f, '@temporary', wrapper)
+
+    def parallel(self, f):
+        @functools.wraps(f)
+        def parallel_wrapper(mod_self, *args, **kwargs):
+            task_list = f(mod_self, *args, **kwargs)
+
+            if not isinstance(task_list, (list, tuple)):
+                raise ValueError('@parallel decorated function "%s" should provide a list of Task objects.' % (name_for_function(f)))
+            return ParallelTaskQueue(name_for_function(f), tasks = task_list)
+
+        return xeno.singleton(parallel_wrapper)
+    
     def setup(self, f):
         self.setup_targets.append(f.__name__)
-        return provide(f)
+        return xeno.provide(f)
 
     def default(self, f):
         self.target(f)
         self.default_target = f.__name__
-        return f
+        return xeno.singleton(f)
 
     def target(self, f):
         self.targets.add(f.__name__)
-        return f
+        return xeno.singleton(f)
     
     def _clean_all_targets(self, injector):
         for target in self.targets:
@@ -106,12 +113,39 @@ class Build:
 
         outputs = [x for x in self.outputs if x.exists()]
         if outputs:
-            self.log.info("Cleaning up output files...")
-            for file in outputs:
-                file.remove()
+            log_for(self).info("Cleaning up output tasks...")
+            for task in outputs:
+                task.remove()
+    
+    def _digest_resource(self, attrs, name, resource):
+        if attrs.check('no_digest'):
+            return resource
+
+        def digest_impl(sub_resource):
+            if not self.cleaning and isinstance(sub_resource, Task):
+                try:
+                    return wide_map(sub_resource.run(), digest_impl)
+                except Exception as e:
+                    raise BuildError('Failed to build "%s", needed by "%s".' % (name, attrs.get('name'))) from e
+            elif isinstance(sub_resource, Breakable):
+                try:
+                    return wide_map(sub_resource.breakdown(), digest_impl)
+
+                except Exception as e:
+                    raise BuildError('Failed to breakdown task "%s" while cleaning.' % name) from e
+            else:
+                return sub_resource
+        
+        return wide_map(resource, digest_impl)
+
+    def _intercept_injection(self, attrs, dependency_map):
+        result = {}
+        return {name: self._digest_resource(attrs, name, resource) \
+                for (name, resource) in dependency_map.items()}
 
     def __call__(self, *modules, target = None, exit = True):
-        injector = Injector(self, *modules)
+        injector = xeno.Injector(self, *modules)
+        injector.add_injection_interceptor(self._intercept_injection)
         
         if not self.targets:
             raise BuildError('No targets defined in the build module.')
@@ -130,7 +164,7 @@ class Build:
         if target == 'clean':
             self.cleaning = True
 
-        self.log.info("Building target: %s" % target)
+        log_for(self).info("Building target: %s" % target)
         
         try:
             # Run all of the setup targets first.
@@ -147,69 +181,40 @@ class Build:
             # Build the specified target
             result_obj = injector.require(target)
 
-            # If the result contains files, build them and then verify that they actually exist.
-            result_list = list(flat_map([result_obj]))
-            for result in result_list:
-                if isinstance(result, File):
-                    result.build()
-                    if not result.exists():
-                        raise BuildError('Target file build succeeded but file does not exist: %s' % result.relpath())
+            def evaluate_tasks(result):
+                if isinstance(result, Task):
+                    return wide_map(result.run(), evaluate_tasks)
+
+            result_obj = wide_map(result_obj, evaluate_tasks)
             
-            self.log.info("BUILD SUCCEEDED")
+            log_for(self).info("BUILD SUCCEEDED")
             if exit:
                 sys.exit(0)
             else:
                 return result_obj
         
         except Exception as e:
-            self.log.error("BUILD FAILED: %s" % str(e), exc_info=is_debug())
+            log_for(self).error("BUILD FAILED: %s" % str(e), exc_info=is_debug())
 
-            if exit:
+            if exit and not is_debug():
                 sys.exit(1)
             else:
                 raise e
 
         finally:
-            # Clean up all temporary files.
-            temp_outputs = [x for x in self.temp_outputs if x.exists()]
-            if temp_outputs:
-                self.log.info("Cleaning up temporary files...")
-                for temp_file in self.temp_outputs:
-                    temp_file.remove()
+            # Clean up all temporary outputs
+            for temp_output in self.temp_outputs:
+                temp_output.cleanup()
 
 #--------------------------------------------------------------------
 # Define the global default build object.
+#
 build = Build()
-
-#--------------------------------------------------------------------
-def input(f):
-    return build.input(f)
-
-#--------------------------------------------------------------------
-def output(f):
-    return build.output(f)
-
-#--------------------------------------------------------------------
-def temporary(f):
-    return build.temporary(f)
-
-#--------------------------------------------------------------------
-def setup(f):
-    return build.setup(f)
-
-#--------------------------------------------------------------------
-def default(f):
-    return build.default(f)
-
-#--------------------------------------------------------------------
-def target(f):
-    return build.target(f)
-
-#--------------------------------------------------------------------
-def no_rebuild(f):
-    @functools.wraps(f)
-    def wrap_build(self, *args, **kwargs):
-        if not self.exists():
-            return f(self, *args, **kwargs)
-    return wrap_build
+input = build.input
+output = build.output
+temporary = build.temporary
+setup = build.setup
+default = build.default
+target = build.target
+parallel = build.parallel
 

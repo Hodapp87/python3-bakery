@@ -7,34 +7,33 @@
 
 from xeno import provide
 
-from .file import File
-from .util import shell, logger_for_class
-from .core import *
+from ..file import File, FileTask
+from ..util import shell, log_for
+from ..core import *
 
 #--------------------------------------------------------------------
-class ObjectFile(File):
+class Object(FileTask):
     def __init__(self, src, config):
         super().__init__(File.change_ext(src, 'o'))
-        self.log = logger_for_class(self)
         self.src = File.as_file(src)
         self.config = config
     
-    def make(self):
-        self.log.info('Building C++: %s' % self.src.relpath())
-        shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self)
+    def run(self):
+        log_for(self).info('Building C++: %s' % self.src.relpath())
+        shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self.file)
+        return self.file
 
 #--------------------------------------------------------------------
-class Executable(File):
+class Executable(FileTask):
     def __init__(self, objects, output, config):
-        super().__init__(output)
+        super().__init__(File.as_file(output))
         self.objects = objects
-        self.log = logger_for_class(self)
         self.config = config
 
     def make(self):
-        File.build_all(self.objects)
-        self.log.info('Building executable: %s' % self.relpath())
-        shell(self.config.CXX, '-o', self, self.objects)
+        log_for(self).info('Building executable: %s' % self.relpath())
+        shell(self.config.CXX, self.config.CXXFLAGS, self.config.LDFLAGS, '-o', self.file, self.objects)
+        return self.file
 
 #--------------------------------------------------------------------
 class Config:
@@ -49,7 +48,7 @@ class Builder:
         self.config = config
     
     def compile(self, src):
-        return ObjectFile(src, self.config)
+        return Object(src, self.config)
 
     def link(self, objects, output):
         return Executable(objects, output, self.config)
