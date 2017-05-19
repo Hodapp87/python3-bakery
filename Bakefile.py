@@ -11,11 +11,12 @@ def primes(max = 20000):
     return result
 
 #--------------------------------------------------------------------
+@alias('builder', 'Recipe::C++::builder')
 class ExampleProgram:
     @setup
-    def setup(self, cxx):
-        cxx.config.CXX = 'clang++'
-        cxx.config.CXXFLAGS.extend([
+    def setup(self, builder):
+        builder.config.CXX = 'clang++'
+        builder.config.CXXFLAGS.extend([
             '-g',
             '-rdynamic',
             '--std=c++14',
@@ -26,8 +27,8 @@ class ExampleProgram:
         return File.glob('demo/src/*.cpp')
     
     @temporary
-    def objects(self, cxx, input_files):
-        return [cxx.compile(x) for x in input_files]
+    def objects(self, builder, input_files):
+        return [builder.compile(x) for x in input_files]
 
     @parallel
     @target
@@ -41,8 +42,8 @@ class ExampleProgram:
     @output
     @target
     @default
-    def build(self, cxx, objects):
-        executable = cxx.link(objects, 'program')
+    def build(self, builder, objects):
+        executable = builder.link(objects, 'program')
         return executable
 
 #--------------------------------------------------------------------

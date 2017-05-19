@@ -30,8 +30,8 @@ class Executable(FileTask):
         self.objects = objects
         self.config = config
 
-    def make(self):
-        log_for(self).info('Building executable: %s' % self.relpath())
+    def run(self):
+        log_for(self).info('Building executable: %s' % self.file.relpath())
         shell(self.config.CC, self.config.CFLAGS, self.config.LDFLAGS, '-o', self.file, self.objects)
         return self.file
 
@@ -54,15 +54,16 @@ class Builder:
         return Executable(objects, output, self.config)
 
 #--------------------------------------------------------------------
+@namespace('Recipe::C')
 class BuildModule:
     def __init__(self):
         self.config = Config()
     
     @provide
-    def cc_config(self):
+    def config(self):
         return self.config
 
     @provide
-    def cc(self, cc_config):
-        return Builder(cc_config)
+    def builder(self, config):
+        return Builder(config)
 

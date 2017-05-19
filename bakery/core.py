@@ -5,6 +5,7 @@
 # Date: Thursday, March 23 2017
 #--------------------------------------------------------------------
 
+import argparse
 import functools
 import logging
 import os
@@ -16,12 +17,29 @@ from .file import *
 from .work import *
 
 #--------------------------------------------------------------------
-def is_debug():
-    return int(os.environ.get('BAKERY_DEBUG', "0"))
-
-#--------------------------------------------------------------------
 class BuildError(Exception):
     pass
+
+#--------------------------------------------------------------------
+class Config:
+    def __init__(self):
+        self.debug = False
+        self.target = None
+        self.cleaning = False
+
+    def get_arg_parser(self):
+        parser = argparse.ArgumentParser(description = 'Execute targets in bakefiles.')
+        parser.add_argument('target', metavar='TARGET', nargs='?', default=None)
+        parser.add_argument('-D', '--debug', action='store_true')
+        parser.add_argument('-c', '--clean', action='store_true')
+        return parser
+
+    def is_debug(self):
+        return int(os.environ.get('BAKERY_DEBUG', "0")) or self.debug
+
+    def parse_args(self):
+        self.get_arg_parser().parse_args(namespace = self)
+        return self
 
 #--------------------------------------------------------------------
 class Build:
@@ -29,29 +47,13 @@ class Build:
         self.outputs = []
         self.targets = set()
         self.temp_outputs = []
-        self.setup_targets = ['_build_init']
+        self.setup_targets = []
         self.default_target = None
-        self.cleaning = False
 
     @xeno.provide
     def build(self):
         return self
     
-    @xeno.provide
-    def build_log_format(self):
-        return '%(message)s'
-
-    @xeno.provide
-    def _build_init(self, build_log_format):
-        # Setup stdout logging
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG if is_debug() else logging.INFO)
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(logging.DEBUG if is_debug() else logging.INFO)
-        formatter = logging.Formatter(build_log_format)
-        handler.setFormatter(formatter)
-        root.addHandler(handler)
-
     def _generic_task_func_wrapper(self, f, decorator_name,
                                    task_callback = lambda x: None):
         def dispatch_result(result):
@@ -107,22 +109,12 @@ class Build:
         self.targets.add(f.__name__)
         return xeno.singleton(f)
     
-    def _clean_all_targets(self, injector):
-        for target in self.targets:
-            injector.require(target)
-
-        outputs = [x for x in self.outputs if x.exists()]
-        if outputs:
-            log_for(self).info("Cleaning up output tasks...")
-            for task in outputs:
-                task.remove()
-    
-    def _digest_resource(self, attrs, name, resource):
+    def _digest_resource(self, attrs, name, resource, cleaning):
         if attrs.check('no_digest'):
             return resource
 
         def digest_impl(sub_resource):
-            if not self.cleaning and isinstance(sub_resource, Task):
+            if not cleaning and isinstance(sub_resource, Task):
                 try:
                     return wide_map(sub_resource.run(), digest_impl)
                 except Exception as e:
@@ -137,21 +129,20 @@ class Build:
                 return sub_resource
         
         return wide_map(resource, digest_impl)
+    
+    def _get_injection_interceptor(self, cleaning = False):
+        def intercept_injection(attrs, dependency_map):
+            result = {}
+            return {name: self._digest_resource(attrs, name, resource, cleaning) \
+                    for (name, resource) in dependency_map.items()}
+        return intercept_injection
 
-    def _intercept_injection(self, attrs, dependency_map):
-        result = {}
-        return {name: self._digest_resource(attrs, name, resource) \
-                for (name, resource) in dependency_map.items()}
-
-    def __call__(self, *modules, target = None, exit = True):
+    def __call__(self, *modules, target = None, exit = True, cleaning = False):
         injector = xeno.Injector(self, *modules)
-        injector.add_injection_interceptor(self._intercept_injection)
+        injector.add_injection_interceptor(self._get_injection_interceptor(cleaning))
         
         if not self.targets:
             raise BuildError('No targets defined in the build module.')
-
-        elif target is None and len(sys.argv) > 1:
-            target = sys.argv[1]
 
         if target is None:
             if len(self.targets) == 1:
@@ -161,9 +152,6 @@ class Build:
             else:
                 raise BuildError('No target was specified and no default target was provided.')
 
-        if target == 'clean':
-            self.cleaning = True
-
         log_for(self).info("Building target: %s" % target)
         
         try:
@@ -171,27 +159,37 @@ class Build:
             for setup_target in self.setup_targets:
                 injector.require(setup_target)
             
-            # If we are trying to clean, we should do that instead.
-            if self.cleaning:
-                return self._clean_all_targets(injector)
-
-            elif not target in self.targets:
+            if not target in self.targets:
                 raise BuildError('Invalid or undefined target: "%s"' % target)
             
             # Build the specified target
             result_obj = injector.require(target)
-
-            def evaluate_tasks(result):
-                if isinstance(result, Task):
-                    return wide_map(result.run(), evaluate_tasks)
-
-            result_obj = wide_map(result_obj, evaluate_tasks)
             
-            log_for(self).info("BUILD SUCCEEDED")
-            if exit:
-                sys.exit(0)
+            if cleaning:
+                def cleanup_tasks(result):
+                    if isinstance(result, Cleanable):
+                        return wide_map(result.cleanup(), cleanup_tasks)
+
+                def breakdown_tasks(result):
+                    if isinstance(result, Breakable):
+                        return wide_map(result.breakdown(), breakdown_tasks)
+                
+                result_obj = wide_map(result_obj, breakdown_tasks)
+                wide_map(result_obj, cleanup_tasks)
+                wide_map(self.outputs, cleanup_tasks)
+
             else:
-                return result_obj
+                def evaluate_tasks(result):
+                    if isinstance(result, Task):
+                        return wide_map(result.run(), evaluate_tasks)
+
+                result_obj = wide_map(result_obj, evaluate_tasks)
+                
+                log_for(self).info("BUILD SUCCEEDED")
+                if exit:
+                    sys.exit(0)
+                else:
+                    return result_obj
         
         except Exception as e:
             log_for(self).error("BUILD FAILED: %s" % str(e), exc_info=is_debug())
@@ -217,4 +215,7 @@ setup = build.setup
 default = build.default
 target = build.target
 parallel = build.parallel
+namespace = xeno.namespace
+alias = xeno.alias
+using = xeno.using
 

@@ -11,11 +11,11 @@ import glob
 import logging
 import os
 
-from .work import Task, Breakable
+from .work import Task, Breakable, Cleanable
 from .util import log_for
 
 #--------------------------------------------------------------------
-class File:
+class File(Cleanable):
     def __init__(self, filename):
         self.filename = str(filename)
     
@@ -59,15 +59,24 @@ class File:
             path = os.getcwd()
         return os.path.relpath(self.abspath(), path)
 
+    def cleanup(self):
+        self.remove()
+
     def __str__(self):
         return self.abspath()
 
 #--------------------------------------------------------------------
-class FileTask(Task, Breakable):
+class FileTask(Task, Breakable, Cleanable):
     def __init__(self, file):
         super().__init__(str(file))
         self.file = file
         
     def breakdown(self):
         return self.file
+
+    def cleanup(self):
+        self.file.cleanup()
+
+    def __str__(self):
+        return self.file.abspath()
 
