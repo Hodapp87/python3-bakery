@@ -1,11 +1,12 @@
 #--------------------------------------------------------------------
-# bakery.cxx: Modules and Classes for building C++ artifacts.
+# bakery.core: Core modules and features of the Bakery build system.
 #
 # Author: Lain Supe (supelee)
 # Date: Thursday, March 23 2017
 #--------------------------------------------------------------------
 
 import argparse
+import inspect
 import functools
 import logging
 import os
@@ -15,6 +16,7 @@ import xeno
 from .util import *
 from .file import *
 from .work import *
+from .log import *
 
 #--------------------------------------------------------------------
 class BuildError(Exception):
@@ -43,24 +45,34 @@ class Config:
 
 #--------------------------------------------------------------------
 class Build:
+    build_count = 0
+
     def __init__(self):
         self.outputs = []
         self.targets = set()
         self.temp_outputs = []
         self.setup_targets = []
         self.default_target = None
+        self.config = Config()
+        self.modules = []
 
     @xeno.provide
-    def build(self):
+    @xeno.named('build')
+    def get_build(self):
         return self
-    
+
+    @xeno.provide
+    @xeno.named('~config')
+    def config(self):
+        return self.config
+
     def _generic_task_func_wrapper(self, f, decorator_name,
                                    task_callback = lambda x: None):
         def dispatch_result(result):
             if isinstance(result, Task):
                 task_callback(result)
             return result
-        
+
         @functools.wraps(f)
         def generic_wrapper(mod_self, *args, **kwargs):
             obj = f(mod_self, *args, **kwargs)
@@ -95,7 +107,7 @@ class Build:
             return ParallelTaskQueue(name_for_function(f), tasks = task_list)
 
         return xeno.singleton(parallel_wrapper)
-    
+
     def setup(self, f):
         self.setup_targets.append(f.__name__)
         return xeno.provide(f)
@@ -108,13 +120,13 @@ class Build:
     def target(self, f):
         self.targets.add(f.__name__)
         return xeno.singleton(f)
-    
-    def _digest_resource(self, attrs, name, resource, cleaning):
+
+    def _digest_resource(self, attrs, name, resource):
         if attrs.check('no_digest'):
             return resource
 
         def digest_impl(sub_resource):
-            if not cleaning and isinstance(sub_resource, Task):
+            if not self.config.cleaning and isinstance(sub_resource, Task):
                 try:
                     return wide_map(sub_resource.run(), digest_impl)
                 except Exception as e:
@@ -127,82 +139,111 @@ class Build:
                     raise BuildError('Failed to breakdown task "%s" while cleaning.' % name) from e
             else:
                 return sub_resource
-        
+
         return wide_map(resource, digest_impl)
-    
-    def _get_injection_interceptor(self, cleaning = False):
+
+    def _get_injection_interceptor(self):
         def intercept_injection(attrs, dependency_map):
             result = {}
-            return {name: self._digest_resource(attrs, name, resource, cleaning) \
+            return {name: self._digest_resource(attrs, name, resource) \
                     for (name, resource) in dependency_map.items()}
         return intercept_injection
 
-    def __call__(self, *modules, target = None, exit = True, cleaning = False):
-        injector = xeno.Injector(self, *modules)
-        injector.add_injection_interceptor(self._get_injection_interceptor(cleaning))
-        
-        if not self.targets:
-            raise BuildError('No targets defined in the build module.')
+    def _aggregate_required_modules(self, modules):
+        required_modules = []
+        for module in modules:
+            attrs = xeno.ClassAttributes.for_class(module)
+            required_modules.extend(attrs.get('bakery::required_modules', []))
+        return [*required_modules, *modules]
 
-        if target is None:
-            if len(self.targets) == 1:
-                target = list(self.targets)[0]
-            elif self.default_target is not None:
-                target = self.default_target
-            else:
-                raise BuildError('No target was specified and no default target was provided.')
+    def __call__(self, *modules, target = None, exit = True):
+        def wrapper(clazz):
+            Build.build_count += 1
+            required_modules = [m() for m in self._aggregate_required_modules([*modules, clazz])]
 
-        log_for(self).info("Building target: %s" % target)
-        
-        try:
-            # Run all of the setup targets first.
-            for setup_target in self.setup_targets:
-                injector.require(setup_target)
-            
-            if not target in self.targets:
-                raise BuildError('Invalid or undefined target: "%s"' % target)
-            
-            # Build the specified target
-            result_obj = injector.require(target)
-            
-            if cleaning:
-                def cleanup_tasks(result):
-                    if isinstance(result, Cleanable):
-                        return wide_map(result.cleanup(), cleanup_tasks)
+            injector = xeno.Injector(self, *required_modules)
+            injector.add_injection_interceptor(self._get_injection_interceptor())
 
-                def breakdown_tasks(result):
-                    if isinstance(result, Breakable):
-                        return wide_map(result.breakdown(), breakdown_tasks)
-                
-                result_obj = wide_map(result_obj, breakdown_tasks)
-                wide_map(result_obj, cleanup_tasks)
-                wide_map(self.outputs, cleanup_tasks)
+            if not self.targets:
+                raise BuildError('No targets defined in the build module.')
 
-            else:
-                def evaluate_tasks(result):
-                    if isinstance(result, Task):
-                        return wide_map(result.run(), evaluate_tasks)
-
-                result_obj = wide_map(result_obj, evaluate_tasks)
-                
-                log_for(self).info("BUILD SUCCEEDED")
-                if exit:
-                    sys.exit(0)
+            build_target = target
+            if build_target is None:
+                if len(self.targets) == 1:
+                    build_target = list(self.targets)[0]
+                elif self.default_target is not None:
+                    build_target = self.default_target
                 else:
-                    return result_obj
-        
-        except Exception as e:
-            log_for(self).error("BUILD FAILED: %s" % str(e), exc_info=is_debug())
+                    raise BuildError('No target was specified and no default target was provided.')
 
-            if exit and not is_debug():
-                sys.exit(1)
-            else:
-                raise e
+            BuildLog.get(self).target("Building target: %s" % build_target)
 
-        finally:
-            # Clean up all temporary outputs
-            for temp_output in self.temp_outputs:
-                temp_output.cleanup()
+            try:
+                # Run all of the setup targets first.
+                for setup_target in self.setup_targets:
+                    injector.require(setup_target)
+
+                if not build_target in self.targets:
+                    raise BuildError('Invalid or undefined target: "%s"' % build_target)
+
+                # Build the specified target
+                result_obj = injector.require(build_target)
+
+                if self.config.cleaning:
+                    def cleanup_tasks(result):
+                        if isinstance(result, Cleanable):
+                            return wide_map(result.cleanup(), cleanup_tasks)
+
+                    def breakdown_tasks(result):
+                        if isinstance(result, Breakable):
+                            return wide_map(result.breakdown(), breakdown_tasks)
+
+                    result_obj = wide_map(result_obj, breakdown_tasks)
+                    wide_map(result_obj, cleanup_tasks)
+                    wide_map(self.outputs, cleanup_tasks)
+
+                else:
+                    def evaluate_tasks(result):
+                        if isinstance(result, Task):
+                            return wide_map(result.run(), evaluate_tasks)
+
+                    result_obj = wide_map(result_obj, evaluate_tasks)
+
+                    BuildLog.get(self).success("BUILD SUCCEEDED")
+                    if exit:
+                        sys.exit(0)
+                    else:
+                        return result_obj
+
+            except Exception as e:
+                BuildLog.get(self).error("BUILD FAILED: %s" % str(e), exc_info=is_debug())
+
+                if exit and not is_debug():
+                    sys.exit(1)
+                else:
+                    raise e
+
+            finally:
+                # Clean up all temporary outputs
+                for temp_output in self.temp_outputs:
+                    temp_output.cleanup()
+
+            return clazz
+        return wrapper
+
+#--------------------------------------------------------------------
+def require(module_name):
+    def wrapper(clazz):
+        attrs = xeno.ClassAttributes.for_class(clazz, write = True)
+        Module = __import__(module_name, globals(), locals(), ['Module']).Module
+        dep_attrs = xeno.ClassAttributes.for_class(Module)
+        if dep_attrs.get('namespace', None):
+            clazz = xeno.using(dep_attrs.get('namespace'))(clazz)
+        required_modules = attrs.get('bakery::required_modules', [])
+        required_modules.append(Module)
+        attrs.put('bakery::required_modules', required_modules)
+        return clazz
+    return wrapper
 
 #--------------------------------------------------------------------
 # Define the global default build object.

@@ -1,6 +1,3 @@
-from bakery import *
-from bakery.recipe.cxx import BuildModule
-
 #--------------------------------------------------------------------
 @task
 def primes(max = 20000):
@@ -11,7 +8,8 @@ def primes(max = 20000):
     return result
 
 #--------------------------------------------------------------------
-@alias('builder', 'Recipe::C++::builder')
+@build()
+@require('bakery.recipe.cpp')
 class ExampleProgram:
     @setup
     def setup(self, builder):
@@ -25,7 +23,7 @@ class ExampleProgram:
     @provide
     def input_files(self):
         return File.glob('demo/src/*.cpp')
-    
+
     @temporary
     def objects(self, builder, input_files):
         return [builder.compile(x) for x in input_files]
@@ -45,7 +43,3 @@ class ExampleProgram:
     def build(self, builder, objects):
         executable = builder.link(objects, 'program')
         return executable
-
-#--------------------------------------------------------------------
-build(BuildModule(), ExampleProgram())
-

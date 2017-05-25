@@ -1,15 +1,16 @@
 #--------------------------------------------------------------------
-# bakery.cxx: Modules and Classes for building C++ artifacts.
+# bakery.cpp: Modules and Classes for building C++ artifacts.
 #
 # Author: Lain Supe (supelee)
 # Date: Thursday, March 23 2017
 #--------------------------------------------------------------------
 
-from xeno import provide
+from xeno import provide, singleton
 
 from ..file import File, FileTask
-from ..util import shell, log_for
+from ..util import shell
 from ..core import *
+from ..log import BuildLog
 
 #--------------------------------------------------------------------
 class Object(FileTask):
@@ -17,9 +18,9 @@ class Object(FileTask):
         super().__init__(File.change_ext(src, 'o'))
         self.src = File.as_file(src)
         self.config = config
-    
-    def run(self):
-        log_for(self).info('Building C++: %s' % self.src.relpath())
+
+    def build(self):
+        BuildLog.get(self).task('Building C++: %s' % self.src.relpath())
         shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self.file)
         return self.file
 
@@ -30,8 +31,8 @@ class Executable(FileTask):
         self.objects = objects
         self.config = config
 
-    def run(self):
-        log_for(self).info('Building executable: %s' % self.file.relpath())
+    def build(self):
+        BuildLog.get(self).task('Building executable: %s' % self.file.relpath())
         shell(self.config.CXX, self.config.CXXFLAGS, self.config.LDFLAGS, '-o', self.file, self.objects)
         return self.file
 
@@ -46,7 +47,7 @@ class Config:
 class Builder:
     def __init__(self, config):
         self.config = config
-    
+
     def compile(self, src):
         return Object(src, self.config)
 
@@ -54,16 +55,18 @@ class Builder:
         return Executable(objects, output, self.config)
 
 #--------------------------------------------------------------------
-@namespace('Recipe::C++')
-class BuildModule:
+@namespace('recipe.cpp')
+class Module:
     def __init__(self):
         self.config = Config()
-    
+
     @provide
+    @singleton
     def config(self):
         return self.config
 
     @provide
+    @singleton
     def builder(self, config):
         return Builder(config)
 

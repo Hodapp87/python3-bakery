@@ -12,13 +12,13 @@ import logging
 import os
 
 from .work import Task, Breakable, Cleanable
-from .util import log_for
+from .log import BuildLog
 
 #--------------------------------------------------------------------
 class File(Cleanable):
     def __init__(self, filename):
         self.filename = str(filename)
-    
+
     @staticmethod
     def glob(*args, **kwargs):
         return [File(f) for f in glob.glob(*args, **kwargs)]
@@ -45,10 +45,10 @@ class File(Cleanable):
 
     def abspath(self):
         return os.path.abspath(os.path.expanduser(self.filename))
-    
+
     def remove(self):
         if self.exists():
-            log_for(self).warning('Deleting file: %s' % self.abspath())
+            BuildLog.get(self).task('Deleting file: %s' % self.abspath())
             os.remove(self.abspath())
 
     def exists(self):
@@ -70,7 +70,13 @@ class FileTask(Task, Breakable, Cleanable):
     def __init__(self, file):
         super().__init__(str(file))
         self.file = file
-        
+
+    def run(self):
+        if self.file.exists():
+            return self.file
+        else:
+            return self.build()
+
     def breakdown(self):
         return self.file
 
