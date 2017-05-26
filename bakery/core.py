@@ -27,7 +27,7 @@ class Config:
     def __init__(self):
         self.debug = False
         self.target = None
-        self.cleaning = False
+        self.clean = False
 
     def get_arg_parser(self):
         parser = argparse.ArgumentParser(description = 'Execute targets in bakefiles.')
@@ -45,15 +45,16 @@ class Config:
 
 #--------------------------------------------------------------------
 class Build:
+    global_config = Config()
     build_count = 0
 
-    def __init__(self):
+    def __init__(self, conf = global_config):
         self.outputs = []
         self.targets = set()
         self.temp_outputs = []
         self.setup_targets = []
         self.default_target = None
-        self.config = Config()
+        self.conf = conf
         self.modules = []
 
     @xeno.provide
@@ -64,7 +65,7 @@ class Build:
     @xeno.provide
     @xeno.named('~config')
     def config(self):
-        return self.config
+        return self.conf
 
     def _generic_task_func_wrapper(self, f, decorator_name,
                                    task_callback = lambda x: None):
@@ -126,7 +127,7 @@ class Build:
             return resource
 
         def digest_impl(sub_resource):
-            if not self.config.cleaning and isinstance(sub_resource, Task):
+            if not self.conf.clean and isinstance(sub_resource, Task):
                 try:
                     return wide_map(sub_resource.run(), digest_impl)
                 except Exception as e:
@@ -167,7 +168,7 @@ class Build:
             if not self.targets:
                 raise BuildError('No targets defined in the build module.')
 
-            build_target = target
+            build_target = target or self.conf.target
             if build_target is None:
                 if len(self.targets) == 1:
                     build_target = list(self.targets)[0]
@@ -176,7 +177,10 @@ class Build:
                 else:
                     raise BuildError('No target was specified and no default target was provided.')
 
-            BuildLog.get(self).target("Building target: %s" % build_target)
+            if self.conf.clean:
+                BuildLog.get(self).target("Cleaning target: %s" % build_target)
+            else:
+                BuildLog.get(self).target("Building target: %s" % build_target)
 
             try:
                 # Run all of the setup targets first.
@@ -189,7 +193,7 @@ class Build:
                 # Build the specified target
                 result_obj = injector.require(build_target)
 
-                if self.config.cleaning:
+                if self.conf.clean:
                     def cleanup_tasks(result):
                         if isinstance(result, Cleanable):
                             return wide_map(result.cleanup(), cleanup_tasks)

@@ -14,6 +14,8 @@ from .log import BuildLog
 BAKEFILE_NAME = 'Bakefile.py'
 PRELUDE = """
 from bakery import *
+from bakery.core import Build
+Build.global_config.parse_args()
 """
 
 #--------------------------------------------------------------------
