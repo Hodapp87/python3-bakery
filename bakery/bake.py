@@ -12,31 +12,29 @@ from .log import BuildLog
 
 #--------------------------------------------------------------------
 BAKEFILE_NAME = 'Bakefile.py'
-PRELUDE = """
+PREAMBLE = """
 from bakery import *
 from bakery.core import Build
 Build.global_config.parse_args()
 """
 
 #--------------------------------------------------------------------
-def is_debug():
-    return os.environ.get('BAKERY_DEBUG') == '1'
-
-#--------------------------------------------------------------------
-def debug_print_instruction_lines(instructions):
-    lines = instructions.split('\n')
-    for n in range(len(lines)):
-        print("%d: %s" % (n, lines[n]))
-
-#--------------------------------------------------------------------
 def main():
-    if not os.path.exists(BAKEFILE_NAME):
-        print('FATAL: No %s in the current directory.' % BAKEFILE_NAME)
+    """
+        The main entry point of the 'bake' command line tool.
+        Prepends the PREAMBLE source to the contents of 'Bakefile.py'
+        in the current directory, or the file specified by the '-b'
+        command line switch, and executes the resulting script.
+    """
+    bakefile_name = BAKEFILE_NAME
+    if '-b' in sys.argv and len(sys.argv) > sys.argv.index('-b'):
+        bakefile_name = sys.argv[sys.argv.index('-b') + 1]
+
+    if not os.path.exists(bakefile_name):
+        print('FATAL: No %s in the current directory.' % bakefile_name)
         sys.exit(1)
 
-    bake_instructions = PRELUDE + open(BAKEFILE_NAME).read()
-    if is_debug():
-        debug_print_instruction_lines(bake_instructions)
+    bake_instructions = PREAMBLE + open(bakefile_name).read()
 
     exec(bake_instructions, globals())
 

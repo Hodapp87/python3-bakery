@@ -6,13 +6,16 @@
 #--------------------------------------------------------------------
 
 from termcolor import colored
-
+import multiprocessing_on_dill as multiprocessing
 from .util import *
+
+#--------------------------------------------------------------------
+log_lock = multiprocessing.Lock()
 
 #--------------------------------------------------------------------
 class BuildLog:
     @staticmethod
-    def get(obj, log = True):
+    def get(obj, log = False):
         return BuildLog(log_for(obj) if log else None)
 
     def __init__(self, logger):
@@ -23,27 +26,32 @@ class BuildLog:
               colored(msg, *colors, attrs = attrs))
 
     def target(self, msg):
-        self.message('====>', msg, prefix_colors = ('magenta',))
-        if self.logger:
-            self.logger.info('====> %s' % msg)
+        with log_lock:
+            self.message('====>', msg, prefix_colors = ('magenta',))
+            if self.logger:
+                self.logger.info('====> %s' % msg)
 
     def task(self, msg):
-        self.message('-->', msg, prefix_colors = ('cyan',))
-        if self.logger:
-            self.logger.info(msg)
+        with log_lock:
+            self.message('-->', msg, prefix_colors = ('cyan',))
+            if self.logger:
+                self.logger.info(msg)
 
     def error(self, msg):
-        self.message('==/==', msg, colors = ('red',), attrs = ('bold',), prefix_colors = ('white', 'on_red'))
-        if self.logger:
-            self.logger.error(msg)
+        with log_lock:
+            self.message('[ERROR]', msg, colors = ('red',), attrs = ('bold',), prefix_colors = ('white', 'on_red'))
+            if self.logger:
+                self.logger.error(msg)
 
     def warning(self, msg):
-        self.message('-/!\-', msg, prefix_colors = ('yellow',))
-        if self.logger:
-            self.logger.warn(msg)
+        with log_lock:
+            self.message('[WARNING]', msg, prefix_colors = ('yellow',))
+            if self.logger:
+                self.logger.warn(msg)
 
     def success(self, msg):
-        self.message('====>', msg, prefix_colors = ('green',), attrs = ('bold',))
-        if self.logger:
-            self.logger.info('====> %s' % msg)
+        with log_lock:
+            self.message('====>', msg, prefix_colors = ('green',), attrs = ('bold',))
+            if self.logger:
+                self.logger.info('====> %s' % msg)
 

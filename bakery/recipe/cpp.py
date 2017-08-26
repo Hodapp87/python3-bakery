@@ -7,32 +7,32 @@
 
 from xeno import provide, singleton
 
-from ..file import File, FileTask
-from ..util import shell
 from ..core import *
+from ..file import File, FileTask
 from ..log import BuildLog
+from ..work import shell
 
 #--------------------------------------------------------------------
-class Object(FileTask):
+class ObjectMaker(FileTask):
     def __init__(self, src, config):
         super().__init__(File.change_ext(src, 'o'))
         self.src = File.as_file(src)
         self.config = config
 
-    def build(self):
-        BuildLog.get(self).task('Building C++: %s' % self.src.relpath())
+    def run(self):
+        BuildLog.get(self).task('Compiling C++: %s' % self.src.relpath())
         shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self.file)
         return self.file
 
 #--------------------------------------------------------------------
-class Executable(FileTask):
+class ExecutableMaker(FileTask):
     def __init__(self, objects, output, config):
         super().__init__(File.as_file(output))
         self.objects = objects
         self.config = config
 
-    def build(self):
-        BuildLog.get(self).task('Building executable: %s' % self.file.relpath())
+    def run(self):
+        BuildLog.get(self).task('Linking executable: %s' % self.file.relpath())
         shell(self.config.CXX, self.config.CXXFLAGS, self.config.LDFLAGS, '-o', self.file, self.objects)
         return self.file
 
@@ -49,13 +49,13 @@ class Builder:
         self.config = config
 
     def compile(self, src):
-        return Object(src, self.config)
+        return ObjectMaker(src, self.config)
 
     def link(self, objects, output):
-        return Executable(objects, output, self.config)
+        return ExecutableMaker(objects, output, self.config)
 
 #--------------------------------------------------------------------
-@namespace('recipe.cpp')
+@namespace('recipe/cpp')
 class Module:
     def __init__(self):
         self.config = Config()

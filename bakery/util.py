@@ -5,11 +5,14 @@
 # Date: Thursday, March 23 2017
 #--------------------------------------------------------------------
 
-import multiprocessing_on_dill as multiprocessing
 import inspect
 import logging
-import os
-import subprocess
+
+from .error import *
+
+#--------------------------------------------------------------------
+def has_method(obj, name):
+    return callable(getattr(obj, name, None))
 
 #--------------------------------------------------------------------
 def compose(arg, *functions):
@@ -82,31 +85,33 @@ def name_for_class(obj):
         return obj.__module__ + '.' + obj.__class__.__qualname__
 
 #--------------------------------------------------------------------
+def short_name_for_function(f):
+    return f.__qualname__
+
+#--------------------------------------------------------------------
 def name_for_function(f):
     return f.__module__ + '.' + f.__qualname__
 
 #--------------------------------------------------------------------
-def shell(*args, check = True):
-    log = logger_for_function(shell)
-    cmd_line = compose(args,
-        lambda x: flat_map(x, degenerate),
-        lambda x: flat_map(x, lambda x: str(x)))
-    log.info("Executing command: %s" % " ".join(cmd_line))
+def tree_to_depth_list(tree, depth_list = None, depth = 0):
+    if depth_list is None:
+        depth_list = []
+    
+    if len(depth_list) <= depth:
+        depth_list.append([])
 
-    try:
-        subprocess.check_call(cmd_line)
-        return 0
+    if isinstance(tree, dict):
+        for key, value in tree.items():
+            depth_list[depth].append(key)
+            tree_to_depth_list(value, depth_list, depth + 1)
 
-    except Exception as e:
-        if check:
-            raise e
-        else:
-            return e.returncode
+    elif isinstance(tree, (list, tuple, set)):
+        for value in tree:
+            if isinstance(value, (dict, list, tuple, set)):
+                tree_to_depth_list(value, depth_list, depth + 1)
+            else:
+                depth_list[depth].append(value)
+    else:
+        depth_list[depth].append(tree)
 
-#--------------------------------------------------------------------
-process_pool = multiprocessing.Pool()
-
-#--------------------------------------------------------------------
-def get_process_pool():
-    return process_pool
-
+    return depth_list
