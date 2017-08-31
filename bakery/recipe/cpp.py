@@ -1,40 +1,40 @@
 #--------------------------------------------------------------------
-# bakery.cxx: Modules and Classes for building C++ artifacts.
+# bakery.cpp: Modules and Classes for building C++ artifacts.
 #
 # Author: Lain Supe (supelee)
 # Date: Thursday, March 23 2017
 #--------------------------------------------------------------------
 
-from xeno import provide
+from xeno import provide, singleton
 
-from .file import File
-from .util import shell, logger_for_class
-from .core import *
+from ..core import *
+from ..file import File, FileTask
+from ..log import BuildLog
+from ..work import shell
 
 #--------------------------------------------------------------------
-class ObjectFile(File):
+class ObjectMaker(FileTask):
     def __init__(self, src, config):
         super().__init__(File.change_ext(src, 'o'))
-        self.log = logger_for_class(self)
         self.src = File.as_file(src)
         self.config = config
-    
-    def make(self):
-        self.log.info('Building C++: %s' % self.src.relpath())
-        shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self)
+
+    def run(self):
+        BuildLog.get(self).task('Compiling C++: %s' % self.src.relpath())
+        shell(self.config.CXX, self.config.CXXFLAGS, '-c', self.src, '-o', self.file)
+        return self.file
 
 #--------------------------------------------------------------------
-class Executable(File):
+class ExecutableMaker(FileTask):
     def __init__(self, objects, output, config):
-        super().__init__(output)
+        super().__init__(File.as_file(output))
         self.objects = objects
-        self.log = logger_for_class(self)
         self.config = config
 
-    def make(self):
-        File.build_all(self.objects)
-        self.log.info('Building executable: %s' % self.relpath())
-        shell(self.config.CXX, '-o', self, self.objects)
+    def run(self):
+        BuildLog.get(self).task('Linking executable: %s' % self.file.relpath())
+        shell(self.config.CXX, self.config.CXXFLAGS, self.config.LDFLAGS, '-o', self.file, self.objects)
+        return self.file
 
 #--------------------------------------------------------------------
 class Config:
@@ -47,23 +47,26 @@ class Config:
 class Builder:
     def __init__(self, config):
         self.config = config
-    
+
     def compile(self, src):
-        return ObjectFile(src, self.config)
+        return ObjectMaker(src, self.config)
 
     def link(self, objects, output):
-        return Executable(objects, output, self.config)
+        return ExecutableMaker(objects, output, self.config)
 
 #--------------------------------------------------------------------
-class BuildModule:
+@namespace('recipe/cpp')
+class Module:
     def __init__(self):
         self.config = Config()
-    
+
     @provide
-    def cxx_config(self):
+    @singleton
+    def config(self):
         return self.config
 
     @provide
-    def cxx(self, cxx_config):
-        return Builder(cxx_config)
+    @singleton
+    def builder(self, config):
+        return Builder(config)
 
