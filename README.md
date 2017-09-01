@@ -13,7 +13,7 @@ to your *build modules* providing tools for interacting with operating systems,
 language compilers, setup tools, and more.  Bakery currently ships with the
 following *recipe modules*:
 
-- `recipe/ccp`: Build tools for C++
+- `recipe/cpp`: Build tools for C++
 - `recipe/c`: Build tools for C
 - `recipe/os`: Build tools for managing the building and cleanup of files,
     directories, and other OS level resources in your *build module*.
